@@ -1,10 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -61,12 +66,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	data, err := io.ReadAll(thumbnailFile)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "internal error reading thumbnail data", err)
-		return
-	}
-
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "failed to retreve video with matching ID", err)
@@ -76,19 +75,35 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "video not owneed by user", nil)
 		return
 	}
+	randSlice := make([]byte, 32)
+	rand.Read(randSlice)
 
-	thumbnailData := thumbnail{
-		data:      data,
-		mediaType: mediaType,
+	thumbnailID := base64.RawURLEncoding.EncodeToString(randSlice)
+
+	fileExtension := strings.Split(mediaType, "/")[1]
+	filePath := filepath.Join(cfg.assetsRoot, thumbnailID+"."+fileExtension)
+
+	newThumbnailFile, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to create thumbnail file", err)
+		return
 	}
-	videoThumbnails[videoID] = thumbnailData
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoIDString)
+	defer newThumbnailFile.Close()
+
+	_, err = io.Copy(newThumbnailFile, thumbnailFile)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to write thumbnail file", err)
+		return
+	}
+
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s.%s", cfg.port, thumbnailID, fileExtension)
+
 	video.ThumbnailURL = &thumbnailURL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "failed to update video thumbnail", err)
+		respondWithError(w, http.StatusInternalServerError, "failed to update video thumbnail in database", err)
 		return
 	}
-	fmt.Println("thumbnailURL: %s", thumbnailURL)
+
 	respondWithJSON(w, http.StatusOK, video)
 }
